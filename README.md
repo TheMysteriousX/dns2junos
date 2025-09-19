@@ -14,6 +14,8 @@ Sample Output
 config
 ------
 
+Note that these are just examples - the output is more logical if you use your own hosts.
+
 ```
 security {
     address-book {

@@ -8,4 +8,6 @@ from scripts.dns2junos import main
 class TestScript(unittest.TestCase):
 
     def test_exec(self):
-        main()
+        with self.assertRaises(SystemExit) as e:
+            main()
+        self.assertEqual(e.exception.code, 2)

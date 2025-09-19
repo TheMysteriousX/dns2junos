@@ -24,6 +24,7 @@ parser = argparse.ArgumentParser(formatter_class=argparse.RawDescriptionHelpForm
 parser.add_argument("-a", dest="address_book", type=str, metavar="address-book", default="global", help="Address book name")
 parser.add_argument("-s", type=str, metavar="address-set", help="Add the entries to an additional address-set")
 parser.add_argument("-n", action="store_false", help="Don't shorten DNS names")
+parser.add_argument("-d", dest="delete", action="store_true", help="Remove existing address sets in set commands")
 parser.add_argument("--dos-my-dns-server", action="store_true", help=argparse.SUPPRESS)
 parser.add_argument('fqdn', type=str, nargs='+')
 
@@ -35,9 +36,7 @@ fmt = parser.add_mutually_exclusive_group()
 fmt.add_argument("--set", dest='set', action="store_true", help="Emit output as set commands")
 fmt.add_argument("--config", dest='config', action="store_true", help="Emit output as raw config")
 
-# Argument setup
-cli_args = parser.parse_args()
-
+cli_args = None
 address_map = {}
 address_sets = {}
 
@@ -68,8 +67,8 @@ def format_entry(address_book, address_type, name, value):
     return f"set security address-book {address_book} {address_type} {name} {value}"
 
 
-def format_set_entry(address_book, address_type, name, target_type, value):
-    return f"set security address-book {address_book} {address_type} {name} {target_type} {value}"
+def format_set_entry(action, address_book, address_type, name, target_type='', value=''):
+    return f"{action} security address-book {address_book} {address_type} {name} {target_type} {value}"
 
 
 def store(host, ip):
@@ -89,18 +88,25 @@ def render_to_set():
 
         for address in addresses:
             if len(addresses) > 1:
+                # We've got more than one address of this family - tack on a -n
                 i += 1
 
             address_sets.setdefault(host.rstrip('46'), []).append(format_name(host, i))
             print(format_entry(cli_args.address_book, 'address', format_name(host, i), address))
 
     for host, addresses in address_sets.items():
+        if cli_args.delete:
+            print(format_set_entry('delete', cli_args.address_book, 'address-set', host))
+
         for address in addresses:
-            print(format_set_entry(cli_args.address_book, 'address-set', host, 'address', address))
+            print(format_set_entry('set', cli_args.address_book, 'address-set', host, 'address', address))
 
     if cli_args.s:
+        if cli_args.delete:
+            print(format_set_entry('delete', cli_args.address_book, 'address-set', cli_args.s))
+
         for host in address_sets.keys():
-            print(format_set_entry(cli_args.address_book, 'address-set', cli_args.s, 'address-set', host))
+            print(format_set_entry('set', cli_args.address_book, 'address-set', cli_args.s, 'address-set', host))
 
 
 def indented_print(text, level):
@@ -108,6 +114,7 @@ def indented_print(text, level):
 
 
 def render_to_config():
+    # Please excuse the mess - I didn't feel like writing a full on recursive config generator for generating a snippet
     indented_print('security {', 0)
     indented_print('address-book {', 1)
     indented_print(cli_args.address_book + ' {', 2)
@@ -140,7 +147,8 @@ def render_to_config():
 
 
 def main(*args, **kwargs):
-    global address_map, address_sets
+    global address_map, address_sets, cli_args
+    cli_args = parser.parse_args()
 
     address_map = {}
 
@@ -156,12 +164,12 @@ def main(*args, **kwargs):
                 try:
                     host = dns.resolver.resolve(dns.reversename.from_address(str(ip)), 'PTR')
 
-                    # Rather than store the resulting address, modify cli_args.fqdn and fall through to allow other addresses to resolve
+                    # Rather than store the resulting address, modify cli_args.fqdn and fall through to allow other addresses to resolve. Lazy, but effective
                     [cli_args.fqdn.append(x.to_text()) for x in host]
-                except dns.resolver.NXDOMAIN:
+                except (dns.resolver.NXDOMAIN, dns.resolver.NoNameservers):
                     # No PTR at this address
                     pass
-            continue
+                continue
         except ValueError:
             # Not a network or an IP
             pass
@@ -187,6 +195,7 @@ def main(*args, **kwargs):
 
     if not address_map:
         print("No addresses found - make sure that provided hosts are both forward and reverse resolvable")
+        sys.exit(1)
 
     if cli_args.config:
         render_to_config()
